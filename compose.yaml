@@ -1,0 +1,57 @@
+services:
+  database:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Define MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: aire
+      MYSQL_USER: aire_user
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Define MYSQL_PASSWORD en .env}
+    volumes:
+      - air_quality_data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u \"$$MYSQL_USER\" \"$$MYSQL_DATABASE\" -e 'SELECT 1 FROM mediciones_aire LIMIT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: api-ubuntu-aire:local
+    command: ["python3", "collector.py"]
+    environment: &common_environment
+      DB_HOST: database
+      DB_PORT: "3306"
+      DB_NAME: aire
+      DB_USER: aire_user
+      DB_PASSWORD: ${MYSQL_PASSWORD:?Define MYSQL_PASSWORD en .env}
+      LATITUDE: ${LATITUDE:-19.4326}
+      LONGITUDE: ${LONGITUDE:--99.1332}
+      LOCATION_NAME: ${LOCATION_NAME:-Ciudad de México}
+      COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-900}
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dash:
+    build: .
+    image: monitor-aire:local
+    command: ["gunicorn", "--bind", "0.0.0.0:8050", "--workers", "2", "--timeout", "60", "app:server"]
+    ports:
+      - "127.0.0.1:8050:8050"
+    environment:
+      <<: *common_environment
+    depends_on:
+      database:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  air_quality_data:
